@@ -1,22 +1,17 @@
+// src/navigation/MainTabs.js
+
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Text, View } from 'react-native';
 import { colors } from '../theme/colors';
 
 import CameraScreen from '../screens/CameraScreen';
-// import NavigateScreen from '../screens/NavigateScreen';
-// import VoiceScreen from '../screens/VoiceScreen';
-// import TranslateScreen from '../screens/TranslateScreen';
-// import ExploreScreen from '../screens/ExploreScreen';
+import NavigateScreen from '../screens/NavigateScreen';
+import VoiceScreen from '../screens/VoiceScreen';
+import TranslateScreen from '../screens/TranslateScreen';
+import ExploreScreen from '../screens/ExploreScreen';
 
 const Tab = createBottomTabNavigator();
-
-// 2. ADDED THE TEMPORARY DUMMY SCREEN
-const DummyScreen = () => (
-  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-    <Text>Tab Screen Coming Soon!</Text>
-  </View>
-);
 
 const TabIcon = ({ emoji, label, focused }) => (
   <View style={{ alignItems: 'center', paddingTop: 4 }}>
@@ -34,11 +29,8 @@ const TabIcon = ({ emoji, label, focused }) => (
     {focused && (
       <View
         style={{
-          width: 4,
-          height: 4,
-          borderRadius: 2,
-          backgroundColor: colors.terra,
-          marginTop: 2,
+          width: 4, height: 4, borderRadius: 2,
+          backgroundColor: colors.terra, marginTop: 2,
         }}
       />
     )}
@@ -60,7 +52,6 @@ export default function MainTabs() {
         },
       }}
     >
-      {/* 3. SWAPPED ALL COMPONENTS TO USE THE DUMMY SCREEN */}
       <Tab.Screen
         name="Camera"
         component={CameraScreen}
@@ -72,7 +63,7 @@ export default function MainTabs() {
       />
       <Tab.Screen
         name="Navigate"
-        component={DummyScreen}
+        component={NavigateScreen}
         options={{
           tabBarIcon: ({ focused }) => (
             <TabIcon emoji="🗺️" label="Navigate" focused={focused} />
@@ -81,7 +72,7 @@ export default function MainTabs() {
       />
       <Tab.Screen
         name="Voice"
-        component={DummyScreen}
+        component={VoiceScreen}
         options={{
           tabBarIcon: ({ focused }) => (
             <TabIcon emoji="🎙️" label="Voice" focused={focused} />
@@ -90,7 +81,7 @@ export default function MainTabs() {
       />
       <Tab.Screen
         name="Translate"
-        component={DummyScreen}
+        component={TranslateScreen}
         options={{
           tabBarIcon: ({ focused }) => (
             <TabIcon emoji="🌐" label="Translate" focused={focused} />
@@ -99,7 +90,7 @@ export default function MainTabs() {
       />
       <Tab.Screen
         name="Explore"
-        component={DummyScreen}
+        component={ExploreScreen}
         options={{
           tabBarIcon: ({ focused }) => (
             <TabIcon emoji="🧭" label="Explore" focused={focused} />
@@ -109,4 +100,3 @@ export default function MainTabs() {
     </Tab.Navigator>
   );
 }
-
