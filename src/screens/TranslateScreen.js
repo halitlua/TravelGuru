@@ -5,221 +5,173 @@ import {
   View, Text, TouchableOpacity, StyleSheet,
   TextInput, ScrollView, StatusBar, ActivityIndicator, Alert,
 } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as Speech from 'expo-speech';
 import { colors } from '../theme/colors';
 
-const LANGUAGES = ['English', 'Italian', 'Spanish', 'French', 'Japanese', 'Arabic', 'Filipino'];
-
-const LANG_FLAGS = {
-  English: '🇬🇧', Italian: '🇮🇹', Spanish: '🇪🇸',
-  French: '🇫🇷', Japanese: '🇯🇵', Arabic: '🇸🇦', Filipino: '🇵🇭',
-};
-
-const LANG_CODES = {
-  English: 'en', Italian: 'it', Spanish: 'es',
-  French: 'fr', Japanese: 'ja', Arabic: 'ar', Filipino: 'tl',
-};
-
-const RECENT_INIT = [
-  { original: 'USCITA', translation: 'EXIT / WAY OUT', flag: '🇮🇹' },
-  { original: 'MERCI', translation: 'Thank you', flag: '🇫🇷' },
-  { original: 'ENTRADA', translation: 'ENTRANCE', flag: '🇪🇸' },
+const LANGUAGES = [
+  { name: 'English', code: 'en', flag: '🇬🇧' },
+  { name: 'Filipino', code: 'tl', flag: '🇵🇭' },
+  { name: 'Italian', code: 'it', flag: '🇮🇹' },
+  { name: 'Spanish', code: 'es', flag: '🇪🇸' },
+  { name: 'French', code: 'fr', flag: '🇫🇷' },
+  { name: 'Japanese', code: 'ja', flag: '🇯🇵' },
+  { name: 'Korean', code: 'ko', flag: '🇰🇷' },
+  { name: 'Chinese', code: 'zh', flag: '🇨🇳' },
+  { name: 'Arabic', code: 'ar', flag: '🇸🇦' },
+  { name: 'German', code: 'de', flag: '🇩🇪' },
 ];
 
-// ── LibreTranslate (free, reliable, no limits) ────────────────────
-async function translateText(text, targetLang) {
-  if (!text?.trim()) throw new Error('No text to translate');
-  const langCode = LANG_CODES[targetLang] || 'en';
+const RECENT_INIT = [
+  { original: 'Hello, where is the park?', translation: 'Ciao, dov\'è il parco?', fromFlag: '🇬🇧', toFlag: '🇮🇹' },
+  { original: 'How much does this cost?', translation: '¿Cuánto cuesta esto?', fromFlag: '🇬🇧', toFlag: '🇪🇸' },
+  { original: 'Thank you very much', translation: 'Merci beaucoup', fromFlag: '🇬🇧', toFlag: '🇫🇷' },
+];
 
+async function translateText(text, fromCode, toCode) {
+  if (!text?.trim()) throw new Error('Please enter text to translate');
+
+  // MyMemory free API — no key needed, reliable
   try {
-    const res = await fetch('https://libretranslate.de/translate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        q: text,
-        source: 'auto',
-        target: langCode,
-      }),
-    });
-
-    if (!res.ok) throw new Error('Request failed');
-
-    const data = await res.json();
-
-    if (!data.translatedText) throw new Error('Empty translation returned');
-
-    return {
-      original: text,
-      detectedLang: data.detectedLanguage?.language?.toUpperCase() || 'AUTO',
-      translation: data.translatedText,
-      pronunciation: null,
-      context: null,
-    };
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${fromCode}|${toCode}`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('MyMemory failed');
+    const data = await response.json();
+    // MyMemory returns 200 even on errors, check responseStatus
+    if (data.responseStatus === 200 && data.responseData?.translatedText) {
+      return data.responseData.translatedText;
+    }
+    throw new Error(data.responseDetails || 'Translation failed');
   } catch (err) {
-    throw new Error('Translation failed. Please try again.');
+    throw new Error('Translation failed. Please check your connection and try again.');
   }
 }
 
-// ── OCR.space API ─────────────────────────────────────────────────
-async function extractTextFromImage(imageUri) {
-  const formData = new FormData();
 
-  formData.append('file', {
-    uri: imageUri,
-    name: 'scan.jpg',
-    type: 'image/jpeg',
-  });
 
-  formData.append('language', 'eng');
-  formData.append('isOverlayRequired', 'false');
-  formData.append('detectOrientation', 'true');
-  formData.append('scale', 'true');
-  formData.append('OCREngine', '1');
-
-  try {
-    const response = await fetch('https://api.ocr.space/parse/image', {
-      method: 'POST',
-      headers: {
-        apikey: 'helloworld', // replace with your free key from ocr.space/ocrapi/freekey
-      },
-      body: formData,
-    });
-
-    const rawText = await response.text();
-
-    if (rawText.includes('<html') || rawText.includes('503')) {
-      throw new Error('The OCR server is currently overloaded. Please try again.');
-    }
-
-    const data = JSON.parse(rawText);
-
-    if (data.IsErroredOnProcessing) {
-      throw new Error(data.ErrorMessage?.[0] || 'OCR failed to read the image.');
-    }
-
-    const text = data.ParsedResults?.[0]?.ParsedText?.trim();
-    if (!text) throw new Error('No readable text found in image.');
-
-    return text;
-  } catch (error) {
-    throw new Error(error.message);
-  }
-}
-
-// ── Component ─────────────────────────────────────────────────────
 export default function TranslateScreen() {
   const [input, setInput] = useState('');
-  const [result, setResult] = useState(null);
-  const [targetLang, setTargetLang] = useState('English');
+  const [result, setResult] = useState('');
+  const [fromLang, setFromLang] = useState(LANGUAGES[0]);
+  const [toLang, setToLang] = useState(LANGUAGES[2]);
   const [loading, setLoading] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [recent, setRecent] = useState(RECENT_INIT);
-  const [showCamera, setShowCamera] = useState(false);
-  const [capturing, setCapturing] = useState(false);
-  const cameraRef = useRef(null);
-  const [permission, requestPermission] = useCameraPermissions();
+  const [selectingFrom, setSelectingFrom] = useState(false);
+  const [selectingTo, setSelectingTo] = useState(false);
 
-  const handleTranslate = async (overrideText) => {
-    const text = (overrideText ?? input).trim();
-    if (!text) return;
+  const [isListening, setIsListening] = useState(false);
+
+  const handleTranslate = async () => {
+    if (!input.trim()) return;
     setLoading(true);
-    setResult(null);
+    setResult('');
     try {
-      const res = await translateText(text, targetLang);
-      setResult(res);
-      setInput(res.original || text);
-      addRecent(res.original || text, res.translation, LANG_FLAGS[targetLang] || '🌐');
+      const translated = await translateText(input, fromLang.code, toLang.code);
+      setResult(translated);
+      setRecent(prev => [
+        { original: input, translation: translated, fromFlag: fromLang.flag, toFlag: toLang.flag },
+        ...prev.filter(r => r.original !== input).slice(0, 4),
+      ]);
     } catch (err) {
-      Alert.alert('Translation failed', err.message || 'Check your internet connection.');
+      Alert.alert('Translation failed', err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleOpenCamera = async () => {
-    if (!permission?.granted) {
-      const { granted } = await requestPermission();
-      if (!granted) {
-        Alert.alert('Camera access needed', 'Please allow camera access to scan text.');
-        return;
-      }
-    }
-    setShowCamera(true);
+  const handleSwap = () => {
+    const temp = fromLang;
+    setFromLang(toLang);
+    setToLang(temp);
+    setInput(result);
+    setResult(input);
   };
 
-  const handleCapture = async () => {
-    if (!cameraRef.current || capturing) return;
-    setCapturing(true);
+  const handleListen = async (text, langCode) => {
+    if (isSpeaking) {
+      Speech.stop();
+      setIsSpeaking(false);
+      return;
+    }
     try {
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.3,
-        exif: false,
-        skipProcessing: false,
+      setIsSpeaking(true);
+      const speechLangCode = langCode === 'tl' ? 'fil-PH' : langCode;
+      await Speech.speak(text, {
+        language: speechLangCode,
+        pitch: 1.0,
+        rate: 0.9,
+        onDone: () => setIsSpeaking(false),
+        onError: () => {
+          setIsSpeaking(false);
+          Alert.alert('Speech Error', 'Could not play audio for this language');
+        },
       });
-
-      setShowCamera(false);
-      setCapturing(false);
-      setLoading(true);
-      setResult(null);
-
-      const extractedText = await extractTextFromImage(photo.uri);
-      await handleTranslate(extractedText);
     } catch (err) {
-      Alert.alert('Scan failed', err.message || 'Could not scan or translate.');
-    } finally {
-      setCapturing(false);
-      setLoading(false);
+      setIsSpeaking(false);
+      Alert.alert('Speech Error', err.message);
     }
   };
 
-  const addRecent = (original, translation, flag) => {
-    setRecent(prev => [
-      { original, translation, flag },
-      ...prev.filter(r => r.original !== original).slice(0, 4),
-    ]);
-  };
-
-  const handleRecent = (item) => {
+  const handleRecentTap = (item) => {
     setInput(item.original);
-    handleTranslate(item.original);
+    setResult(item.translation);
   };
 
-  if (showCamera) {
+
+
+  // FIX 2: Voice input — only show the alert when starting, not when stopping
+  const handleVoiceInput = async () => {
+    if (isListening) {
+      setIsListening(false);
+      return;
+    }
+    setIsListening(true);
+    Alert.alert(
+      'Voice Input',
+      'Speak clearly in ' + fromLang.name + '. This feature requires native speech recognition setup.',
+      [{ text: 'OK', onPress: () => setIsListening(false) }]
+    );
+  };
+
+
+
+  // Language picker
+  if (selectingFrom || selectingTo) {
+    const isFrom = selectingFrom;
     return (
-      <View style={styles.cameraScreen}>
-        <StatusBar barStyle="light-content" />
-        <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" />
-        <View style={styles.overlay}>
-          <View style={styles.camTopBar}>
-            <TouchableOpacity style={styles.camClose} onPress={() => setShowCamera(false)}>
-              <Text style={styles.camCloseTxt}>✕</Text>
-            </TouchableOpacity>
-            <Text style={styles.camTitle}>Point at text</Text>
-            <View style={{ width: 40 }} />
-          </View>
-          <View style={styles.frameHint}>
-            <View style={styles.frameBox}>
-              <View style={[styles.frameCorner, styles.frameTL]} />
-              <View style={[styles.frameCorner, styles.frameTR]} />
-              <View style={[styles.frameCorner, styles.frameBL]} />
-              <View style={[styles.frameCorner, styles.frameBR]} />
-            </View>
-            <Text style={styles.frameLabel}>Align text within the frame</Text>
-          </View>
-          <View style={styles.camBottom}>
-            <Text style={styles.camHint}>→ Translating to {targetLang}</Text>
-            <TouchableOpacity
-              style={[styles.captureBtn, capturing && styles.captureBtnDisabled]}
-              onPress={handleCapture}
-              disabled={capturing}
-            >
-              {capturing
-                ? <ActivityIndicator color="#fff" size="small" />
-                : <View style={styles.captureInner} />
-              }
-            </TouchableOpacity>
-            <View style={{ height: 20 }} />
-          </View>
+      <View style={styles.pickerContainer}>
+        <StatusBar barStyle="dark-content" />
+        <View style={styles.pickerHeader}>
+          <Text style={styles.pickerTitle}>
+            Select {isFrom ? 'source' : 'target'} language
+          </Text>
+          <TouchableOpacity onPress={() => { setSelectingFrom(false); setSelectingTo(false); }}>
+            <Text style={styles.pickerClose}>✕</Text>
+          </TouchableOpacity>
         </View>
+        <ScrollView>
+          {LANGUAGES.map((lang) => (
+            <TouchableOpacity
+              key={lang.code}
+              style={[
+                styles.pickerRow,
+                (isFrom ? fromLang.code : toLang.code) === lang.code && styles.pickerRowActive,
+              ]}
+              onPress={() => {
+                if (isFrom) setFromLang(lang);
+                else setToLang(lang);
+                setSelectingFrom(false);
+                setSelectingTo(false);
+              }}
+            >
+              <Text style={styles.pickerFlag}>{lang.flag}</Text>
+              <Text style={styles.pickerLangName}>{lang.name}</Text>
+              {(isFrom ? fromLang.code : toLang.code) === lang.code && (
+                <Text style={styles.pickerCheck}>✓</Text>
+              )}
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
       </View>
     );
   }
@@ -227,115 +179,144 @@ export default function TranslateScreen() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
+
+      {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Live Translate</Text>
-        <Text style={styles.headerSub}>Type or scan text to translate instantly</Text>
+        <Text style={styles.headerTitle}>Translate</Text>
+        <Text style={styles.headerSub}>Translate text to any language</Text>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
 
-        <View style={styles.langRow}>
-          <View style={styles.langBox}>
-            <Text style={styles.langFlag}>🌐</Text>
-            <Text style={styles.langName}>Auto</Text>
-          </View>
-          <View style={styles.arrowBox}>
-            <Text style={styles.arrow}>→</Text>
-          </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.langScroll}>
-            {LANGUAGES.map((lang) => (
-              <TouchableOpacity
-                key={lang}
-                style={[styles.langChip, targetLang === lang && styles.langChipActive]}
-                onPress={() => setTargetLang(lang)}
-              >
-                <Text style={[styles.langChipText, targetLang === lang && styles.langChipTextActive]}>
-                  {LANG_FLAGS[lang]} {lang}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+        {/* Language selector */}
+        <View style={styles.langSelector}>
+          <TouchableOpacity style={styles.langBtn} onPress={() => setSelectingFrom(true)}>
+            <Text style={styles.langBtnFlag}>{fromLang.flag}</Text>
+            <Text style={styles.langBtnName}>{fromLang.name}</Text>
+            <Text style={styles.langBtnArrow}>▾</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.swapBtn} onPress={handleSwap}>
+            <Text style={styles.swapIcon}>⇄</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.langBtn} onPress={() => setSelectingTo(true)}>
+            <Text style={styles.langBtnFlag}>{toLang.flag}</Text>
+            <Text style={styles.langBtnName}>{toLang.name}</Text>
+            <Text style={styles.langBtnArrow}>▾</Text>
+          </TouchableOpacity>
         </View>
 
-        <View style={styles.inputWrap}>
+        {/* Input box */}
+        <View style={styles.inputCard}>
+          <View style={styles.inputHeader}>
+            <Text style={styles.inputLang}>{fromLang.flag} {fromLang.name}</Text>
+            {input.length > 0 && (
+              <TouchableOpacity onPress={() => { setInput(''); setResult(''); }}>
+                <Text style={styles.clearBtn}>✕</Text>
+              </TouchableOpacity>
+            )}
+          </View>
           <TextInput
             style={styles.input}
             value={input}
             onChangeText={setInput}
-            placeholder="Type text to translate..."
+            placeholder={`Type in ${fromLang.name}...`}
             placeholderTextColor={colors.muted}
-            returnKeyType="done"
-            onSubmitEditing={() => handleTranslate()}
+            multiline
+            numberOfLines={3}
+            textAlignVertical="top"
           />
-          <TouchableOpacity
-            style={[styles.translateBtn, loading && styles.btnDisabled]}
-            onPress={() => handleTranslate()}
-            disabled={loading}
-          >
-            {loading
-              ? <ActivityIndicator size="small" color="#fff" />
-              : <Text style={styles.translateBtnText}>Go</Text>
-            }
-          </TouchableOpacity>
+          <View style={styles.inputFooter}>
+            {input.length > 0 && (
+              <TouchableOpacity
+                style={styles.listenBtn}
+                onPress={() => handleListen(input, fromLang.code)}
+              >
+                <Text style={styles.listenBtnText}>🔊 Listen</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={[styles.voiceBtn, isListening && styles.voiceBtnActive]}
+              onPress={handleVoiceInput}
+            >
+              <Text style={styles.voiceBtnText}>{isListening ? '⏹' : '🎤'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.translateBtn, (!input.trim() || loading) && styles.btnDisabled]}
+              onPress={handleTranslate}
+              disabled={!input.trim() || loading}
+            >
+              {loading
+                ? <ActivityIndicator size="small" color="#fff" />
+                : <Text style={styles.translateBtnText}>Translate →</Text>
+              }
+            </TouchableOpacity>
+          </View>
         </View>
 
-        <TouchableOpacity style={styles.scanBtn} onPress={handleOpenCamera} disabled={loading}>
-          <Text style={styles.scanBtnText}>📷  Point camera at text</Text>
-        </TouchableOpacity>
-
-        {loading && !result && (
-          <View style={styles.loadingCard}>
-            <ActivityIndicator size="large" color={colors.terra} />
-            <Text style={styles.loadingText}>Reading & translating…</Text>
-          </View>
-        )}
-
-        {result && (
+        {/* Result box */}
+        {result ? (
           <View style={styles.resultCard}>
             <View style={styles.resultHeader}>
-              <View style={styles.fromBox}>
-                <Text style={styles.fromFlag}>🌐</Text>
-                <Text style={styles.fromLang}>ORIGINAL TEXT ({result.detectedLang.toUpperCase()})</Text>
-              </View>
-              <Text style={styles.originalText} numberOfLines={3}>
-                {result.original || input}
-              </Text>
+              <Text style={styles.resultLang}>{toLang.flag} {toLang.name}</Text>
             </View>
-            <View style={styles.divider} />
-            <View style={styles.translationBox}>
-              <Text style={styles.translationLabel}>
-                TRANSLATION · {targetLang.toUpperCase()} {LANG_FLAGS[targetLang]}
-              </Text>
-              <Text style={styles.translationText}>{result.translation}</Text>
-              {result.pronunciation && (
-                <Text style={styles.pronunciation}>🔊 {result.pronunciation}</Text>
-              )}
+            <Text style={styles.resultText}>{result}</Text>
+            <View style={styles.resultFooter}>
+              <TouchableOpacity
+                style={[styles.listenBtn, styles.listenBtnResult]}
+                onPress={() => handleListen(result, toLang.code)}
+              >
+                <Text style={styles.listenBtnText}>
+                  {isSpeaking ? '⏹ Stop' : '🔊 Listen'}
+                </Text>
+              </TouchableOpacity>
+
             </View>
-            <View style={styles.resultActions}>
-              <TouchableOpacity style={styles.actionBtn}>
-                <Text style={styles.actionBtnText}>🔊 Pronounce</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.actionBtn} onPress={() => handleTranslate(result.original)}>
-                <Text style={styles.actionBtnText}>🔄 Retranslate</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.actionBtn, styles.actionBtnAlt]} onPress={() => { setResult(null); setInput(''); }}>
-                <Text style={[styles.actionBtnText, { color: colors.terra }]}>✕ Clear</Text>
-              </TouchableOpacity>
-            </View>
+          </View>
+        ) : (
+          <View style={styles.emptyResult}>
+            <Text style={styles.emptyResultText}>Translation will appear here</Text>
           </View>
         )}
 
-        <Text style={styles.sectionTitle}>Recent Translations</Text>
+        {/* Quick phrases */}
+        <Text style={styles.sectionTitle}>Quick Phrases</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 20, gap: 8 }}>
+          {[
+            'Hello!',
+            'Thank you',
+            'Where is the bathroom?',
+            'How much does this cost?',
+            'I need help',
+            'Do you speak English?',
+          ].map((phrase, i) => (
+            <TouchableOpacity
+              key={i}
+              style={styles.phraseChip}
+              onPress={() => { setInput(phrase); setResult(''); }}
+            >
+              <Text style={styles.phraseChipText}>{phrase}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+        {/* Recent */}
+        <Text style={styles.sectionTitle}>Recent</Text>
         {recent.map((item, i) => (
-          <TouchableOpacity key={i} style={styles.recentRow} onPress={() => handleRecent(item)}>
-            <View style={styles.recentFlag}>
-              <Text style={{ fontSize: 20 }}>{item.flag}</Text>
+          <TouchableOpacity key={i} style={styles.recentRow} onPress={() => handleRecentTap(item)}>
+            <View style={styles.recentFlags}>
+              <Text style={styles.recentFlag}>{item.fromFlag}</Text>
+              <Text style={styles.recentArrow}>→</Text>
+              <Text style={styles.recentFlag}>{item.toFlag}</Text>
             </View>
             <View style={styles.recentInfo}>
               <Text style={styles.recentOriginal} numberOfLines={1}>{item.original}</Text>
               <Text style={styles.recentTranslation} numberOfLines={1}>{item.translation}</Text>
             </View>
-            <Text style={styles.recentReplay}>▶ Replay</Text>
+            <TouchableOpacity onPress={() => handleListen(item.translation, toLang.code)}>
+              <Text style={styles.recentListen}>🔊</Text>
+            </TouchableOpacity>
           </TouchableOpacity>
         ))}
       </ScrollView>
@@ -345,68 +326,139 @@ export default function TranslateScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.screenBg },
-  cameraScreen: { flex: 1, backgroundColor: '#000' },
-  overlay: { flex: 1, justifyContent: 'space-between' },
-  camTopBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 56, paddingHorizontal: 20, paddingBottom: 16 },
-  camClose: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
-  camCloseTxt: { fontSize: 18, color: '#fff' },
-  camTitle: { fontFamily: 'Syne_700Bold', fontSize: 17, color: '#fff' },
-  frameHint: { alignItems: 'center', gap: 16 },
-  frameBox: { width: 260, height: 160, position: 'relative' },
-  frameCorner: { position: 'absolute', width: 28, height: 28, borderColor: '#fff', borderWidth: 3 },
-  frameTL: { top: 0, left: 0, borderRightWidth: 0, borderBottomWidth: 0, borderTopLeftRadius: 6 },
-  frameTR: { top: 0, right: 0, borderLeftWidth: 0, borderBottomWidth: 0, borderTopRightRadius: 6 },
-  frameBL: { bottom: 0, left: 0, borderRightWidth: 0, borderTopWidth: 0, borderBottomLeftRadius: 6 },
-  frameBR: { bottom: 0, right: 0, borderLeftWidth: 0, borderTopWidth: 0, borderBottomRightRadius: 6 },
-  frameLabel: { fontFamily: 'DMSans_400Regular', fontSize: 13, color: 'rgba(255,255,255,0.75)' },
-  camBottom: { alignItems: 'center', gap: 16, paddingBottom: 40 },
-  camHint: { fontFamily: 'DMSans_400Regular', fontSize: 13, color: 'rgba(255,255,255,0.7)', backgroundColor: 'rgba(0,0,0,0.4)', paddingHorizontal: 16, paddingVertical: 6, borderRadius: 20 },
-  captureBtn: { width: 72, height: 72, borderRadius: 36, backgroundColor: colors.terra, alignItems: 'center', justifyContent: 'center', borderWidth: 4, borderColor: 'rgba(255,255,255,0.5)' },
-  captureBtnDisabled: { opacity: 0.6 },
-  captureInner: { width: 54, height: 54, borderRadius: 27, backgroundColor: '#fff' },
+
+  // Header
   header: { paddingTop: 56, paddingHorizontal: 20, paddingBottom: 16, backgroundColor: colors.sand },
   headerTitle: { fontFamily: 'Syne_800ExtraBold', fontSize: 26, color: colors.ink },
   headerSub: { fontFamily: 'DMSans_400Regular', fontSize: 13, color: colors.muted, marginTop: 4 },
-  langRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 16, gap: 8, backgroundColor: colors.sand },
-  langBox: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.sandDark, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
-  langFlag: { fontSize: 16 },
-  langName: { fontFamily: 'DMSans_500Medium', fontSize: 13, color: colors.ink },
-  arrowBox: { paddingHorizontal: 4 },
-  arrow: { fontSize: 18, color: colors.muted },
-  langScroll: { flex: 1 },
-  langChip: { borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, marginRight: 6, backgroundColor: colors.sandDark },
-  langChipActive: { backgroundColor: colors.terra },
-  langChipText: { fontFamily: 'DMSans_500Medium', fontSize: 12, color: colors.inkMid },
-  langChipTextActive: { color: '#fff' },
-  inputWrap: { flexDirection: 'row', gap: 10, paddingHorizontal: 20, paddingVertical: 12, backgroundColor: colors.sand },
-  input: { flex: 1, backgroundColor: '#fff', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, fontFamily: 'DMSans_400Regular', fontSize: 14, color: colors.ink, borderWidth: 1, borderColor: colors.sandDark },
-  translateBtn: { backgroundColor: colors.terra, borderRadius: 12, paddingHorizontal: 16, justifyContent: 'center', minWidth: 60, alignItems: 'center' },
-  btnDisabled: { opacity: 0.6 },
+
+  // Language selector
+  langSelector: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 20, paddingVertical: 14,
+    backgroundColor: colors.sand, gap: 10,
+  },
+  langBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#fff', borderRadius: 12,
+    paddingHorizontal: 12, paddingVertical: 10,
+    gap: 6, borderWidth: 1, borderColor: colors.sandDark,
+  },
+  langBtnFlag: { fontSize: 18 },
+  langBtnName: { flex: 1, fontFamily: 'DMSans_500Medium', fontSize: 13, color: colors.ink },
+  langBtnArrow: { fontSize: 12, color: colors.muted },
+  swapBtn: {
+    width: 38, height: 38, borderRadius: 19,
+    backgroundColor: colors.terra,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  swapIcon: { fontSize: 16, color: '#fff' },
+
+  // Input card
+  inputCard: {
+    marginHorizontal: 20, marginBottom: 12,
+    backgroundColor: '#fff', borderRadius: 16,
+    padding: 16,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08, shadowRadius: 8, elevation: 3,
+  },
+  inputHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  inputLang: { fontFamily: 'DMSans_500Medium', fontSize: 13, color: colors.muted },
+  clearBtn: { fontSize: 16, color: colors.muted },
+  input: {
+    fontFamily: 'DMSans_400Regular', fontSize: 16,
+    color: colors.ink, minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  inputFooter: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 10 },
+  listenBtn: {
+    backgroundColor: colors.sandDark, borderRadius: 20,
+    paddingHorizontal: 14, paddingVertical: 8,
+  },
+  listenBtnResult: { backgroundColor: colors.jadePale },
+  listenBtnText: { fontFamily: 'DMSans_500Medium', fontSize: 12, color: colors.inkMid },
+  voiceBtn: { backgroundColor: colors.sandDark, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8 },
+  voiceBtnActive: { backgroundColor: colors.terra },
+  voiceBtnText: { fontFamily: 'DMSans_500Medium', fontSize: 14, color: colors.inkMid },
+  translateBtn: {
+    backgroundColor: colors.terra, borderRadius: 20,
+    paddingHorizontal: 18, paddingVertical: 8,
+  },
+  btnDisabled: { opacity: 0.5 },
   translateBtnText: { fontFamily: 'Syne_700Bold', fontSize: 13, color: '#fff' },
-  scanBtn: { marginHorizontal: 20, marginBottom: 16, backgroundColor: colors.jadePale, borderRadius: 12, paddingVertical: 12, alignItems: 'center', borderWidth: 1, borderColor: colors.jade },
-  scanBtnText: { fontFamily: 'DMSans_500Medium', fontSize: 13, color: colors.jade },
-  loadingCard: { marginHorizontal: 20, marginBottom: 16, backgroundColor: '#fff', borderRadius: 16, padding: 24, alignItems: 'center', gap: 12 },
-  loadingText: { fontFamily: 'DMSans_400Regular', fontSize: 13, color: colors.muted },
-  resultCard: { marginHorizontal: 20, marginBottom: 20, backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8, elevation: 3 },
-  resultHeader: { backgroundColor: colors.inkMid, padding: 16 },
-  fromBox: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  fromFlag: { fontSize: 16 },
-  fromLang: { fontFamily: 'DMSans_400Regular', fontSize: 11, color: 'rgba(255,255,255,0.6)', letterSpacing: 1 },
-  originalText: { fontFamily: 'Syne_800ExtraBold', fontSize: 24, color: colors.sand },
-  divider: { height: 1, backgroundColor: colors.sandDark },
-  translationBox: { padding: 16 },
-  translationLabel: { fontFamily: 'DMSans_400Regular', fontSize: 10, color: colors.muted, letterSpacing: 1, marginBottom: 6 },
-  translationText: { fontFamily: 'Syne_700Bold', fontSize: 20, color: colors.ink, marginBottom: 6 },
-  pronunciation: { fontFamily: 'DMSans_400Regular', fontSize: 13, color: colors.muted },
-  resultActions: { flexDirection: 'row', gap: 8, padding: 16, paddingTop: 0 },
-  actionBtn: { flex: 1, backgroundColor: colors.sandDark, borderRadius: 10, paddingVertical: 10, alignItems: 'center' },
-  actionBtnAlt: { backgroundColor: colors.terraPale },
-  actionBtnText: { fontFamily: 'DMSans_500Medium', fontSize: 11, color: colors.inkMid },
-  sectionTitle: { fontFamily: 'Syne_700Bold', fontSize: 16, color: colors.ink, paddingHorizontal: 20, marginBottom: 12 },
-  recentRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', marginHorizontal: 20, borderRadius: 12, padding: 12, marginBottom: 8, gap: 12 },
-  recentFlag: { width: 36, height: 36, borderRadius: 8, backgroundColor: colors.sandDark, alignItems: 'center', justifyContent: 'center' },
+
+  // Result card
+  resultCard: {
+    marginHorizontal: 20, marginBottom: 20,
+    backgroundColor: colors.inkMid, borderRadius: 16,
+    padding: 16,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12, shadowRadius: 8, elevation: 3,
+  },
+  resultHeader: { marginBottom: 10 },
+  resultLang: { fontFamily: 'DMSans_500Medium', fontSize: 13, color: 'rgba(245,239,224,0.6)' },
+  resultText: {
+    fontFamily: 'Syne_700Bold', fontSize: 20,
+    color: colors.sand, lineHeight: 28, marginBottom: 14,
+  },
+  resultFooter: { flexDirection: 'row', gap: 10 },
+  copyBtn: {
+    backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 20,
+    paddingHorizontal: 14, paddingVertical: 8,
+  },
+  copyBtnText: { fontFamily: 'DMSans_500Medium', fontSize: 12, color: colors.sand },
+  emptyResult: {
+    marginHorizontal: 20, marginBottom: 20,
+    backgroundColor: colors.sandDark, borderRadius: 16,
+    padding: 24, alignItems: 'center',
+  },
+  emptyResultText: { fontFamily: 'DMSans_400Regular', fontSize: 14, color: colors.muted },
+
+  // Quick phrases
+  sectionTitle: {
+    fontFamily: 'Syne_700Bold', fontSize: 16, color: colors.ink,
+    paddingHorizontal: 20, marginBottom: 12, marginTop: 8,
+  },
+  phraseChip: {
+    backgroundColor: '#fff', borderRadius: 20,
+    paddingHorizontal: 14, paddingVertical: 8,
+    borderWidth: 1, borderColor: colors.sandDark,
+  },
+  phraseChipText: { fontFamily: 'DMSans_500Medium', fontSize: 12, color: colors.inkMid },
+
+  // Recent
+  recentRow: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#fff', marginHorizontal: 20,
+    borderRadius: 12, padding: 12, marginBottom: 8, gap: 12,
+  },
+  recentFlags: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  recentFlag: { fontSize: 16 },
+  recentArrow: { fontSize: 10, color: colors.muted },
   recentInfo: { flex: 1 },
   recentOriginal: { fontFamily: 'Syne_700Bold', fontSize: 13, color: colors.ink },
   recentTranslation: { fontFamily: 'DMSans_400Regular', fontSize: 11, color: colors.muted, marginTop: 2 },
-  recentReplay: { fontFamily: 'DMSans_500Medium', fontSize: 11, color: colors.terra },
+  recentListen: { fontSize: 20 },
+
+  // Language picker
+  pickerContainer: { flex: 1, backgroundColor: colors.screenBg },
+  pickerHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingTop: 56, paddingHorizontal: 20, paddingBottom: 16,
+    backgroundColor: colors.sand,
+  },
+  pickerTitle: { fontFamily: 'Syne_800ExtraBold', fontSize: 20, color: colors.ink },
+  pickerClose: { fontSize: 20, color: colors.muted },
+  pickerRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    paddingHorizontal: 20, paddingVertical: 16,
+    borderBottomWidth: 1, borderBottomColor: colors.sandDark,
+    backgroundColor: '#fff',
+  },
+  pickerRowActive: { backgroundColor: colors.jadePale },
+  pickerFlag: { fontSize: 28 },
+  pickerLangName: { flex: 1, fontFamily: 'DMSans_500Medium', fontSize: 16, color: colors.ink },
+  pickerCheck: { fontSize: 18, color: colors.jade, fontWeight: 'bold' },
+
+
 });

@@ -12,14 +12,14 @@ import { colors } from '../theme/colors';
 
 const { height } = Dimensions.get('window');
 
-// ── Sheet snap points (distance from top of screen) ──────────────
+// ── Sheet snap points ─────────────────────────────────────────────
 const SNAP = {
-  collapsed: height * 0.78,  // map mostly visible, sheet peeking
-  half:      height * 0.52,  // default — balanced
-  expanded:  height * 0.18,  // full list
+  collapsed: height * 0.78,
+  half:      height * 0.52,
+  expanded:  height * 0.18,
 };
 
-// ─── Helpers ─────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────
 
 function getLandmarkEmoji(tags) {
   if (tags.tourism === 'museum') return '🏛️';
@@ -27,13 +27,34 @@ function getLandmarkEmoji(tags) {
   if (tags.tourism === 'attraction') return '⭐';
   if (tags.tourism === 'artwork') return '🎨';
   if (tags.tourism === 'viewpoint') return '🔭';
+  if (tags.tourism === 'zoo') return '🦁';
+  if (tags.tourism === 'aquarium') return '🐠';
+  if (tags.tourism === 'theme_park') return '🎡';
+  if (tags.tourism === 'gallery') return '🖼️';
   if (tags.historic === 'castle') return '🏰';
   if (tags.historic === 'ruins') return '🏚️';
   if (tags.historic === 'monument') return '🗿';
   if (tags.historic === 'memorial') return '🕊️';
-  if (tags.amenity === 'place_of_worship') return '⛪';
+  if (tags.historic === 'shrine') return '⛩️';
+  if (tags.amenity === 'place_of_worship') {
+    if (tags.religion === 'muslim') return '🕌';
+    if (tags.religion === 'buddhist') return '☸️';
+    if (tags.building === 'mosque') return '🕌';
+    if (tags.building === 'temple') return '⛩️';
+    return '⛪';
+  }
+  if (tags.amenity === 'theatre' || tags.amenity === 'cinema') return '🎭';
+  if (tags.amenity === 'library') return '📚';
   if (tags.leisure === 'park') return '🌳';
-  if (tags.natural === 'peak') return '⛰️';
+  if (tags.leisure === 'garden') return '🌸';
+  if (tags.leisure === 'stadium') return '🏟️';
+  if (tags.leisure === 'nature_reserve') return '🌿';
+  if (tags.natural === 'peak' || tags.natural === 'volcano') return '⛰️';
+  if (tags.natural === 'beach') return '🏖️';
+  if (tags.natural === 'cave_entrance') return '🕳️';
+  if (tags.building === 'cathedral' || tags.building === 'church') return '⛪';
+  if (tags.building === 'mosque') return '🕌';
+  if (tags.building === 'temple' || tags.building === 'shrine') return '⛩️';
   return '📍';
 }
 
@@ -43,12 +64,31 @@ function getLandmarkType(tags) {
   if (tags.tourism === 'attraction') return 'Attraction';
   if (tags.tourism === 'artwork') return 'Artwork';
   if (tags.tourism === 'viewpoint') return 'Viewpoint';
+  if (tags.tourism === 'zoo') return 'Zoo';
+  if (tags.tourism === 'aquarium') return 'Aquarium';
+  if (tags.tourism === 'theme_park') return 'Theme Park';
+  if (tags.tourism === 'gallery') return 'Gallery';
   if (tags.historic === 'castle') return 'Castle';
   if (tags.historic === 'ruins') return 'Historic Ruins';
   if (tags.historic === 'monument') return 'Monument';
   if (tags.historic === 'memorial') return 'Memorial';
+  if (tags.historic === 'shrine') return 'Shrine';
+  if (tags.historic) return 'Historic Site';
   if (tags.amenity === 'place_of_worship') return 'Place of Worship';
+  if (tags.amenity === 'theatre') return 'Theatre';
+  if (tags.amenity === 'cinema') return 'Cinema';
+  if (tags.amenity === 'library') return 'Library';
   if (tags.leisure === 'park') return 'Park';
+  if (tags.leisure === 'garden') return 'Garden';
+  if (tags.leisure === 'stadium') return 'Stadium';
+  if (tags.leisure === 'nature_reserve') return 'Nature Reserve';
+  if (tags.natural === 'peak') return 'Mountain Peak';
+  if (tags.natural === 'beach') return 'Beach';
+  if (tags.natural === 'cave_entrance') return 'Cave';
+  if (tags.building === 'cathedral') return 'Cathedral';
+  if (tags.building === 'church') return 'Church';
+  if (tags.building === 'mosque') return 'Mosque';
+  if (tags.building === 'temple') return 'Temple';
   return 'Landmark';
 }
 
@@ -82,49 +122,193 @@ function getBearing(lat1, lng1, lat2, lng2) {
   return dirs[Math.round(deg / 45) % 8];
 }
 
-// ─── Overpass API ────────────────────────────────────────────────
+// ── OSRM turn icon helper ─────────────────────────────────────────
+function getTurnIcon(modifier) {
+  if (!modifier) return '⬆️';
+  if (modifier.includes('left')) return modifier.includes('sharp') ? '↰' : modifier.includes('slight') ? '↖️' : '⬅️';
+  if (modifier.includes('right')) return modifier.includes('sharp') ? '↱' : modifier.includes('slight') ? '↗️' : '➡️';
+  if (modifier === 'uturn') return '🔄';
+  return '⬆️';
+}
 
-async function fetchNearbyLandmarks(lat, lng, radius = 2000) {
-  const query = `
-    [out:json][timeout:25];
-    (
-      node["tourism"~"museum|monument|attraction|artwork|viewpoint"](around:${radius},${lat},${lng});
-      node["historic"~"castle|ruins|monument|memorial"](around:${radius},${lat},${lng});
-      node["amenity"="place_of_worship"]["name"](around:${radius},${lat},${lng});
-      node["leisure"="park"]["name"](around:${radius},${lat},${lng});
+// ─── OSRM Routing ─────────────────────────────────────────────────
+
+async function fetchRoute(fromLat, fromLng, toLat, toLng) {
+  try {
+    const url = `https://router.project-osrm.org/route/v1/foot/${fromLng},${fromLat};${toLng},${toLat}?overview=full&geometries=geojson&steps=true&annotations=false`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (data.code !== 'Ok' || !data.routes?.length) {
+      return { coords: [[fromLat, fromLng], [toLat, toLng]], steps: [] };
+    }
+
+    const route = data.routes[0];
+
+    // Convert [lng, lat] → [lat, lng] for Leaflet
+    const coords = route.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+
+    // Flatten all steps from all legs
+    const steps = route.legs.flatMap(leg =>
+      leg.steps
+        .filter(step => step.maneuver?.type !== 'depart' || step.name)
+        .map(step => ({
+          instruction: buildInstruction(step),
+          distance: step.distance < 1000
+            ? `${Math.round(step.distance)}m`
+            : `${(step.distance / 1000).toFixed(1)}km`,
+          duration: `${Math.round(step.duration / 60)} min`,
+          icon: getTurnIcon(step.maneuver?.modifier),
+          type: step.maneuver?.type,
+        }))
+        .filter(step => step.instruction)
     );
-    out body 20;
+
+    return {
+      coords,
+      steps,
+      totalDistance: route.distance,
+      totalDuration: route.duration,
+    };
+  } catch {
+    // Network error — fall back to straight line, no steps
+    return { coords: [[fromLat, fromLng], [toLat, toLng]], steps: [] };
+  }
+}
+
+function buildInstruction(step) {
+  const type = step.maneuver?.type;
+  const modifier = step.maneuver?.modifier;
+  const name = step.name ? `onto ${step.name}` : '';
+
+  if (type === 'depart') return step.name ? `Start on ${step.name}` : '';
+  if (type === 'arrive') return 'Arrive at destination';
+  if (type === 'turn') {
+    if (modifier?.includes('left')) return `Turn left ${name}`.trim();
+    if (modifier?.includes('right')) return `Turn right ${name}`.trim();
+    return `Continue ${name}`.trim();
+  }
+  if (type === 'continue') return `Continue ${name}`.trim();
+  if (type === 'new name') return `Continue ${name}`.trim();
+  if (type === 'roundabout') return `Take the roundabout ${name}`.trim();
+  if (type === 'rotary') return `Take the rotary ${name}`.trim();
+  if (type === 'fork') {
+    if (modifier?.includes('left')) return `Keep left ${name}`.trim();
+    if (modifier?.includes('right')) return `Keep right ${name}`.trim();
+  }
+  if (type === 'merge') return `Merge ${name}`.trim();
+  if (type === 'end of road') {
+    if (modifier?.includes('left')) return `Turn left at end of road ${name}`.trim();
+    if (modifier?.includes('right')) return `Turn right at end of road ${name}`.trim();
+  }
+  return step.name ? `Head towards ${step.name}` : '';
+}
+
+// ─── Overpass API ─────────────────────────────────────────────────
+
+async function fetchNearbyLandmarks(lat, lng, radius = 5000) {
+  // Try multiple Overpass API mirrors in case one is down
+  const OVERPASS_MIRRORS = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+  ];
+
+  // Simplified, broader query that's more reliable
+  const query = `
+    [out:json][timeout:30];
+    (
+      node["tourism"](around:${radius},${lat},${lng});
+      node["historic"](around:${radius},${lat},${lng});
+      node["amenity"~"place_of_worship|library|theatre|cinema|museum"](around:${radius},${lat},${lng});
+      node["leisure"~"park|nature_reserve|garden|stadium"](around:${radius},${lat},${lng});
+      node["natural"~"peak|beach|cave_entrance"](around:${radius},${lat},${lng});
+      way["tourism"](around:${radius},${lat},${lng});
+      way["historic"](around:${radius},${lat},${lng});
+      way["leisure"~"park|nature_reserve|garden"](around:${radius},${lat},${lng});
+    );
+    out geom 50;
   `;
-  const res = await fetch('https://overpass-api.de/api/interpreter', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `data=${encodeURIComponent(query)}`,
-  });
-  const data = await res.json();
+
+  let data = null;
+  let lastError = null;
+
+  for (const mirror of OVERPASS_MIRRORS) {
+    try {
+      const res = await fetch(mirror, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `data=${encodeURIComponent(query)}`,
+      });
+      
+      if (!res.ok) {
+        lastError = `Server error: ${res.status}`;
+        continue;
+      }
+      
+      data = await res.json();
+      
+      if (data?.elements?.length > 0) {
+        break; // got results, stop trying mirrors
+      }
+    } catch (err) {
+      lastError = err.message;
+      continue;
+    }
+  }
+
+  // If no data from Overpass, return empty with a message to debug
+  if (!data?.elements?.length) {
+    console.log('No landmarks fetched. Last error:', lastError);
+    return [];
+  }
+
   return data.elements
-    .filter(el => el.tags?.name)
+    .filter(el => el.tags?.name) // must have a name
     .map(el => {
-      const dist = getDistance(lat, lng, el.lat, el.lon);
+      // Handle both node and way elements
+      let elLat, elLng;
+      
+      if (el.lat && el.lon) {
+        // Node element
+        elLat = el.lat;
+        elLng = el.lon;
+      } else if (el.center?.lat && el.center?.lon) {
+        // Way element with center
+        elLat = el.center.lat;
+        elLng = el.center.lon;
+      } else if (el.geometry && el.geometry.length > 0) {
+        // Way element - use first coordinate
+        const first = el.geometry[0];
+        elLat = first.lat;
+        elLng = first.lon;
+      }
+      
+      if (!elLat || !elLng) return null;
+
+      const dist = getDistance(lat, lng, elLat, elLng);
       return {
         id: el.id,
         name: el.tags.name,
         type: getLandmarkType(el.tags),
         emoji: getLandmarkEmoji(el.tags),
         category: getLandmarkCategory(el.tags),
-        lat: el.lat,
-        lng: el.lon,
+        lat: elLat,
+        lng: elLng,
         distance: dist.text,
         meters: dist.meters,
         time: `${dist.minutes} min`,
       };
     })
+    .filter(Boolean) // remove nulls
+    .filter((el, i, arr) => arr.findIndex(e => e.name === el.name) === i) // dedupe by name
     .sort((a, b) => a.meters - b.meters)
-    .slice(0, 12);
+    .slice(0, 20);
 }
 
-// ─── Map HTML ────────────────────────────────────────────────────
+// ─── Map HTML ──────────────────────────────────────────────────────
 
-function buildMapHTML(userLat, userLng, landmarks, selected) {
+function buildMapHTML(userLat, userLng, landmarks, selected, routeCoords) {
   const markerJS = landmarks.map(p => `
     L.marker([${p.lat},${p.lng}],{
       icon:L.divIcon({
@@ -137,15 +321,31 @@ function buildMapHTML(userLat, userLng, landmarks, selected) {
     });
   `).join('');
 
-  const routeJS = selected ? `
-    if(window._route) map.removeLayer(window._route);
-    window._route=L.polyline([[${userLat},${userLng}],[${selected.lat},${selected.lng}]],{
-      color:'#1a73e8',weight:4,opacity:0.8,dashArray:'8,12'
-    }).addTo(map);
-    map.fitBounds([[${userLat},${userLng}],[${selected.lat},${selected.lng}]],{
-      paddingTopLeft:[40,100],paddingBottomRight:[40,60]
-    });
-  ` : `map.setView([${userLat},${userLng}],15);`;
+  // Draw real OSRM route if available, else straight dashed line
+  const routeJS = selected
+    ? routeCoords?.length > 2
+      ? `
+        if(window._route) map.removeLayer(window._route);
+        window._route = L.polyline(${JSON.stringify(routeCoords)}, {
+          color:'#1a73e8', weight:5, opacity:0.85, lineJoin:'round', lineCap:'round'
+        }).addTo(map);
+        map.fitBounds(window._route.getBounds(), {
+          paddingTopLeft:[40,120], paddingBottomRight:[40,80]
+        });
+      `
+      : `
+        if(window._route) map.removeLayer(window._route);
+        window._route = L.polyline([[${userLat},${userLng}],[${selected.lat},${selected.lng}]], {
+          color:'#1a73e8', weight:4, opacity:0.8, dashArray:'8,12'
+        }).addTo(map);
+        map.fitBounds([[${userLat},${userLng}],[${selected.lat},${selected.lng}]], {
+          paddingTopLeft:[40,100], paddingBottomRight:[40,60]
+        });
+      `
+    : `
+        if(window._route){ map.removeLayer(window._route); window._route=null; }
+        map.setView([${userLat},${userLng}],15);
+      `;
 
   return `<!DOCTYPE html>
 <html>
@@ -192,17 +392,17 @@ window.addEventListener('message',onMsg);
 </html>`;
 }
 
-// ─── Category filters ────────────────────────────────────────────
+// ─── Category filters ──────────────────────────────────────────────
 
 const CATEGORIES = [
-  { key: 'all',        label: 'All',         emoji: '🗺️' },
-  { key: 'attraction', label: 'Attractions',  emoji: '⭐' },
-  { key: 'history',    label: 'History',      emoji: '🏛️' },
-  { key: 'nature',     label: 'Nature',       emoji: '🌳' },
-  { key: 'culture',    label: 'Culture',      emoji: '⛪' },
+  { key: 'all',        label: 'All',        emoji: '🗺️' },
+  { key: 'attraction', label: 'Attractions', emoji: '⭐' },
+  { key: 'history',    label: 'History',     emoji: '🏛️' },
+  { key: 'nature',     label: 'Nature',      emoji: '🌳' },
+  { key: 'culture',    label: 'Culture',     emoji: '⛪' },
 ];
 
-// ─── Main Component ──────────────────────────────────────────────
+// ─── Main Component ────────────────────────────────────────────────
 
 export default function NavigateScreen() {
   const [userLocation, setUserLocation] = useState(null);
@@ -213,11 +413,18 @@ export default function NavigateScreen() {
   const [error, setError] = useState(null);
   const [activeCategory, setActiveCategory] = useState('all');
 
+  // ── NEW: routing state ──
+  const [routeCoords, setRouteCoords] = useState([]);
+  const [routeSteps, setRouteSteps] = useState([]);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [activeStep, setActiveStep] = useState(0);
+  const [showSteps, setShowSteps] = useState(false);
+
   const webViewRef = useRef(null);
   const locationSub = useRef(null);
   const headingSub = useRef(null);
 
-  // ── Draggable sheet with PanResponder ──
+  // ── Draggable sheet ──
   const sheetY = useRef(new Animated.Value(SNAP.half)).current;
   const lastSnap = useRef(SNAP.half);
 
@@ -232,9 +439,7 @@ export default function NavigateScreen() {
       },
       onPanResponderMove: (_, g) => {
         const next = lastSnap.current + g.dy;
-        if (next >= SNAP.expanded && next <= SNAP.collapsed) {
-          sheetY.setValue(g.dy);
-        }
+        if (next >= SNAP.expanded && next <= SNAP.collapsed) sheetY.setValue(g.dy);
       },
       onPanResponderRelease: (_, g) => {
         sheetY.flattenOffset();
@@ -243,27 +448,22 @@ export default function NavigateScreen() {
         if (g.vy < -0.5) target = SNAP.expanded;
         else if (g.vy > 0.5) target = SNAP.collapsed;
         else {
-          const nearest = Object.values(SNAP)
+          target = Object.values(SNAP)
             .map(s => ({ s, d: Math.abs(cur - s) }))
             .sort((a, b) => a.d - b.d)[0].s;
-          target = nearest;
         }
         lastSnap.current = target;
-        Animated.spring(sheetY, {
-          toValue: target, tension: 70, friction: 13, useNativeDriver: false,
-        }).start();
+        Animated.spring(sheetY, { toValue: target, tension: 70, friction: 13, useNativeDriver: false }).start();
       },
     })
   ).current;
 
   const snapSheet = (point) => {
     lastSnap.current = SNAP[point];
-    Animated.spring(sheetY, {
-      toValue: SNAP[point], tension: 70, friction: 13, useNativeDriver: false,
-    }).start();
+    Animated.spring(sheetY, { toValue: SNAP[point], tension: 70, friction: 13, useNativeDriver: false }).start();
   };
 
-  // ── Nav banner: animate height (no render when empty) ──
+  // ── Nav banner animation ──
   const bannerH = useRef(new Animated.Value(0)).current;
   const bannerOp = useRef(new Animated.Value(0)).current;
 
@@ -324,6 +524,36 @@ export default function NavigateScreen() {
     return () => { locationSub.current?.remove(); headingSub.current?.remove(); };
   }, [!!userLocation]);
 
+  // ── NEW: fetch OSRM route when a place is selected ──
+  useEffect(() => {
+    if (!selected || !userLocation) {
+      setRouteCoords([]);
+      setRouteSteps([]);
+      setActiveStep(0);
+      setShowSteps(false);
+      return;
+    }
+
+    setRouteLoading(true);
+    fetchRoute(userLocation.lat, userLocation.lng, selected.lat, selected.lng)
+      .then(({ coords, steps }) => {
+        setRouteCoords(coords);
+        setRouteSteps(steps);
+        setActiveStep(0);
+      })
+      .finally(() => setRouteLoading(false));
+  }, [selected?.id]);
+
+  // ── NEW: advance active step as user walks ──
+  useEffect(() => {
+    if (!routeSteps.length || !userLocation || activeStep >= routeSteps.length) return;
+    // Simple threshold: if user is within ~30m of the current step's target coord, advance
+    const nextCoord = routeCoords[Math.min(activeStep + 1, routeCoords.length - 1)];
+    if (!nextCoord) return;
+    const dist = getDistance(userLocation.lat, userLocation.lng, nextCoord[0], nextCoord[1]);
+    if (dist.meters < 30) setActiveStep(prev => Math.min(prev + 1, routeSteps.length - 1));
+  }, [userLocation]);
+
   const handleSelect = useCallback((place) => {
     setSelected(prev => prev?.id === place.id ? null : place);
   }, []);
@@ -353,7 +583,9 @@ export default function NavigateScreen() {
     ? getBearing(userLocation.lat, userLocation.lng, selected.lat, selected.lng)
     : '';
 
-  // ─── Loading / Error ─────────────────────────────────────────
+  const currentStep = routeSteps[activeStep];
+
+  // ─── Loading / Error ───────────────────────────────────────────
   if (loading) {
     return (
       <View style={s.centered}>
@@ -375,14 +607,14 @@ export default function NavigateScreen() {
   }
 
   const mapHTML = userLocation
-    ? buildMapHTML(userLocation.lat, userLocation.lng, landmarks, selected)
+    ? buildMapHTML(userLocation.lat, userLocation.lng, landmarks, selected, routeCoords)
     : '';
 
   return (
     <View style={s.root}>
       <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
 
-      {/* ── Full-screen map behind everything ── */}
+      {/* ── Full-screen map ── */}
       <View style={StyleSheet.absoluteFill}>
         {userLocation && (
           <WebView
@@ -398,7 +630,7 @@ export default function NavigateScreen() {
         )}
       </View>
 
-      {/* ── Map controls (top layer) ── */}
+      {/* ── Map controls ── */}
       <View style={s.gpsBadge}>
         <View style={s.gpsDot} />
         <Text style={s.gpsText}>Live GPS</Text>
@@ -413,7 +645,7 @@ export default function NavigateScreen() {
         </View>
       </View>
 
-      {/* ── Waze-style floating nav card — ONLY shows when a place is selected ── */}
+      {/* ── Nav banner (shows when place selected) ── */}
       <Animated.View
         style={[s.navCard, { height: bannerH, opacity: bannerOp }]}
         pointerEvents={selected ? 'auto' : 'none'}
@@ -421,7 +653,10 @@ export default function NavigateScreen() {
         {selected && (
           <View style={s.navInner}>
             <View style={s.navEmojiWrap}>
-              <Text style={{ fontSize: 22 }}>{selected.emoji}</Text>
+              {routeLoading
+                ? <ActivityIndicator size="small" color="#fff" />
+                : <Text style={{ fontSize: 22 }}>{selected.emoji}</Text>
+              }
             </View>
             <View style={{ flex: 1 }}>
               <Text style={s.navName} numberOfLines={1}>{selected.name}</Text>
@@ -430,6 +665,12 @@ export default function NavigateScreen() {
                 {'  ·  '}{selected.distance}{'  ·  '}~{selected.time} walk
               </Text>
             </View>
+            {/* Toggle step-by-step directions */}
+            {routeSteps.length > 0 && (
+              <TouchableOpacity style={s.stepsToggle} onPress={() => setShowSteps(v => !v)}>
+                <Text style={s.stepsToggleTxt}>{showSteps ? '▲' : '▼'}</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={s.navEnd} onPress={() => setSelected(null)}>
               <Text style={s.navEndTxt}>✕</Text>
             </TouchableOpacity>
@@ -437,14 +678,61 @@ export default function NavigateScreen() {
         )}
       </Animated.View>
 
+      {/* ── NEW: Turn-by-turn step panel ── */}
+      {selected && showSteps && routeSteps.length > 0 && (
+        <View style={s.stepPanel}>
+          {/* Current step */}
+          <View style={s.stepCurrent}>
+            <Text style={s.stepIcon}>{currentStep?.icon}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={s.stepInstruction}>{currentStep?.instruction}</Text>
+              <Text style={s.stepMeta}>{currentStep?.distance}  ·  {currentStep?.duration}</Text>
+            </View>
+          </View>
+
+          {/* Step progress bar */}
+          <View style={s.stepBar}>
+            {routeSteps.map((_, i) => (
+              <View
+                key={i}
+                style={[
+                  s.stepDot,
+                  i < activeStep && s.stepDotDone,
+                  i === activeStep && s.stepDotActive,
+                ]}
+              />
+            ))}
+          </View>
+
+          {/* Scroll list of all steps */}
+          <ScrollView style={s.stepList} showsVerticalScrollIndicator={false}>
+            {routeSteps.map((step, i) => (
+              <TouchableOpacity
+                key={i}
+                style={[s.stepRow, i === activeStep && s.stepRowActive]}
+                onPress={() => setActiveStep(i)}
+              >
+                <Text style={s.stepRowIcon}>{step.icon}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={[s.stepRowText, i === activeStep && s.stepRowTextActive]} numberOfLines={2}>
+                    {step.instruction}
+                  </Text>
+                  <Text style={s.stepRowMeta}>{step.distance}</Text>
+                </View>
+                {i < activeStep && <Text style={s.stepDoneCheck}>✓</Text>}
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+
       {/* ── Draggable Bottom Sheet ── */}
       <Animated.View style={[s.sheet, { top: sheetY }]}>
 
-        {/* Drag handle — PanResponder attached here */}
+        {/* Drag handle */}
         <View style={s.dragZone} {...panResponder.panHandlers}>
           <View style={s.handle} />
 
-          {/* Sheet header */}
           <View style={s.sheetHead}>
             <View>
               <Text style={s.sheetTitle}>Nearby</Text>
@@ -526,7 +814,7 @@ export default function NavigateScreen() {
   );
 }
 
-// ─── Styles ──────────────────────────────────────────────────────
+// ─── Styles ────────────────────────────────────────────────────────
 
 const BLUE = '#1a73e8';
 const BLUE_PALE = '#e8f0fe';
@@ -536,7 +824,6 @@ const MUTED = '#8e8e93';
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#f0ede8' },
 
-  // Loading / error
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f2f2f7' },
   loadCard: {
     backgroundColor: '#fff', borderRadius: 20, padding: 32,
@@ -548,7 +835,6 @@ const s = StyleSheet.create({
   loadSub: { fontFamily: 'DMSans_400Regular', fontSize: 13, color: MUTED },
   errText: { fontFamily: 'DMSans_400Regular', fontSize: 14, color: MUTED, textAlign: 'center', paddingHorizontal: 32 },
 
-  // Map overlays
   gpsBadge: {
     position: 'absolute', top: Platform.OS === 'ios' ? 56 : 36, left: 16,
     flexDirection: 'row', alignItems: 'center', gap: 6,
@@ -572,7 +858,7 @@ const s = StyleSheet.create({
   },
   compassN: { fontFamily: 'Syne_700Bold', fontSize: 14, color: '#ff3b30' },
 
-  // Floating nav card — Waze style, only shows when navigating
+  // Nav card
   navCard: {
     position: 'absolute',
     top: Platform.OS === 'ios' ? 110 : 90,
@@ -596,6 +882,12 @@ const s = StyleSheet.create({
   navName: { fontFamily: 'Syne_700Bold', fontSize: 14, color: '#fff', marginBottom: 3 },
   navSub: { fontFamily: 'DMSans_400Regular', fontSize: 11, color: 'rgba(255,255,255,0.8)' },
   navDir: { fontFamily: 'Syne_700Bold', color: '#fff' },
+  stepsToggle: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  stepsToggleTxt: { fontSize: 12, color: '#fff' },
   navEnd: {
     width: 32, height: 32, borderRadius: 16,
     backgroundColor: 'rgba(255,255,255,0.2)',
@@ -603,10 +895,61 @@ const s = StyleSheet.create({
   },
   navEndTxt: { fontSize: 14, color: '#fff', fontFamily: 'Syne_700Bold' },
 
+  // ── Step panel ──
+  stepPanel: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 190 : 170,
+    left: 12, right: 12,
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    maxHeight: height * 0.35,
+    zIndex: 24,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12, shadowRadius: 12, elevation: 10,
+  },
+  stepCurrent: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    padding: 14,
+    backgroundColor: BLUE_PALE,
+    borderBottomWidth: 1, borderBottomColor: '#e0e8fb',
+  },
+  stepIcon: { fontSize: 26, width: 36, textAlign: 'center' },
+  stepInstruction: { fontFamily: 'Syne_700Bold', fontSize: 14, color: INK },
+  stepMeta: { fontFamily: 'DMSans_400Regular', fontSize: 11, color: MUTED, marginTop: 2 },
+
+  // Progress dots
+  stepBar: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 8, gap: 4,
+    borderBottomWidth: 1, borderBottomColor: '#f0f0f5',
+  },
+  stepDot: {
+    width: 6, height: 6, borderRadius: 3,
+    backgroundColor: '#e0e0e5', flex: 1, maxWidth: 20,
+  },
+  stepDotDone: { backgroundColor: BLUE, opacity: 0.4 },
+  stepDotActive: { backgroundColor: BLUE, height: 8, borderRadius: 4 },
+
+  // Steps list
+  stepList: { maxHeight: height * 0.22 },
+  stepRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 14, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: '#f5f5f5',
+  },
+  stepRowActive: { backgroundColor: '#f0f5ff' },
+  stepRowIcon: { fontSize: 18, width: 28, textAlign: 'center' },
+  stepRowText: { fontFamily: 'DMSans_400Regular', fontSize: 12, color: INK },
+  stepRowTextActive: { fontFamily: 'DMSans_500Medium', color: BLUE },
+  stepRowMeta: { fontFamily: 'DMSans_400Regular', fontSize: 10, color: MUTED, marginTop: 2 },
+  stepDoneCheck: { fontSize: 14, color: '#34c759', fontFamily: 'Syne_700Bold' },
+
   // Sheet
   sheet: {
     position: 'absolute', left: 0, right: 0,
-    bottom: -60,                         // overshoot so rounded corners hide off-screen
+    bottom: -60,
     backgroundColor: '#f2f2f7',
     borderTopLeftRadius: 24, borderTopRightRadius: 24,
     shadowColor: '#000',
@@ -616,8 +959,7 @@ const s = StyleSheet.create({
   },
   dragZone: {
     borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    backgroundColor: '#f2f2f7', zIndex: 2,
-    paddingBottom: 4,
+    backgroundColor: '#f2f2f7', zIndex: 2, paddingBottom: 4,
   },
   handle: {
     width: 36, height: 4, backgroundColor: '#c7c7cc',
@@ -634,7 +976,6 @@ const s = StyleSheet.create({
   liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#34c759' },
   liveTxt: { fontFamily: 'DMSans_400Regular', fontSize: 11, color: '#34c759' },
 
-  // Category chips
   catWrap: { paddingHorizontal: 20, gap: 8, paddingRight: 20 },
   chip: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
@@ -647,12 +988,10 @@ const s = StyleSheet.create({
   chipLbl: { fontFamily: 'DMSans_500Medium', fontSize: 12, color: INK },
   chipLblOn: { color: '#fff' },
 
-  // List
   list: { flex: 1, paddingHorizontal: 16, paddingTop: 4 },
   empty: { alignItems: 'center', paddingTop: 40, gap: 10 },
   emptyTxt: { fontFamily: 'DMSans_400Regular', fontSize: 13, color: MUTED, textAlign: 'center' },
 
-  // Cards
   card: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: '#fff', borderRadius: 16,

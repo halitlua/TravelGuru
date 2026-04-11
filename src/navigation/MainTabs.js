@@ -75,7 +75,7 @@ export default function MainTabs() {
         component={VoiceScreen}
         options={{
           tabBarIcon: ({ focused }) => (
-            <TabIcon emoji="🎙️" label="Voice" focused={focused} />
+            <TabIcon emoji="🎙️" label="Guru" focused={focused} />
           ),
         }}
       />

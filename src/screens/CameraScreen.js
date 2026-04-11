@@ -10,14 +10,12 @@ import { WebView } from 'react-native-webview';
 import { colors } from '../theme/colors';
 import landmarks from '../data/landmarks.json';
 import { setCurrentLandmark } from './VoiceScreen';
+import { addScan } from '../store';
 
 const { width, height } = Dimensions.get('window');
-const FRAME_SIZE = width * 0.72;
 
-// ── Your Teachable Machine model URL ────────────────────────────
 const MODEL_URL = 'https://teachablemachine.withgoogle.com/models/NoUercEoc/';
 
-// ── Match result to landmarks.json ──────────────────────────────
 function getLandmarkData(predictedLabel) {
   if (!predictedLabel) return null;
   const clean = predictedLabel.toLowerCase().trim();
@@ -39,7 +37,6 @@ function getLandmarkData(predictedLabel) {
   };
 }
 
-// ── Teachable Machine inference via WebView ──────────────────────
 const TM_INFERENCE_HTML = (modelUrl, base64) => `
 <!DOCTYPE html>
 <html>
@@ -54,7 +51,6 @@ async function run() {
     const modelURL = "${modelUrl}model.json";
     const metadataURL = "${modelUrl}metadata.json";
     const model = await tmImage.load(modelURL, metadataURL);
-
     const img = new Image();
     img.onload = async function() {
       const predictions = await model.predict(img);
@@ -77,7 +73,7 @@ run();
 </html>
 `;
 
-export default function CameraScreen() {
+export default function CameraScreen({ navigation }) {
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState(null);
@@ -86,30 +82,22 @@ export default function CameraScreen() {
   const cameraRef = useRef(null);
 
   const scanLineAnim = useRef(new Animated.Value(0)).current;
-  const pulseAnim = useRef(new Animated.Value(1)).current;
   const resultAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    if (!scanning) {
+      scanLineAnim.setValue(0);
+      return;
+    }
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(scanLineAnim, { toValue: 1, duration: 2000, useNativeDriver: true }),
-        Animated.timing(scanLineAnim, { toValue: 0, duration: 2000, useNativeDriver: true }),
+        Animated.timing(scanLineAnim, { toValue: 1, duration: 1800, useNativeDriver: true }),
+        Animated.timing(scanLineAnim, { toValue: 0, duration: 1800, useNativeDriver: true }),
       ])
     );
     loop.start();
     return () => loop.stop();
-  }, []);
-
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 1.06, duration: 1200, useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 1, duration: 1200, useNativeDriver: true }),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, []);
+  }, [scanning]);
 
   const handleScan = async () => {
     if (scanning || !cameraRef.current) return;
@@ -117,15 +105,10 @@ export default function CameraScreen() {
     setResult(null);
     setInferenceHTML(null);
     resultAnim.setValue(0);
-
     try {
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.6,
-        base64: true,
-        skipProcessing: true,
+        quality: 0.6, base64: true, skipProcessing: true,
       });
-
-      // Trigger WebView inference
       setInferenceHTML(TM_INFERENCE_HTML(MODEL_URL, photo.base64));
     } catch (err) {
       Alert.alert('Error', 'Could not take photo. Try again.');
@@ -137,22 +120,12 @@ export default function CameraScreen() {
     try {
       const data = JSON.parse(event.nativeEvent.data);
       setInferenceHTML(null);
-
       if (data.success) {
         const landmarkData = getLandmarkData(data.label);
-
-        // Set the scanned landmark so VoiceScreen knows what to answer about
         setCurrentLandmark(landmarkData);
-
-        setResult({
-          ...landmarkData,
-          confidence: data.confidence,
-          allPredictions: data.all,
-        });
-
-        Animated.spring(resultAnim, {
-          toValue: 1, tension: 60, friction: 8, useNativeDriver: true,
-        }).start();
+        addScan(landmarkData);
+        setResult({ ...landmarkData, confidence: data.confidence, allPredictions: data.all });
+        Animated.spring(resultAnim, { toValue: 1, tension: 60, friction: 8, useNativeDriver: true }).start();
       } else {
         Alert.alert('Could not identify', 'Try pointing at a clearer view of the landmark.');
       }
@@ -168,11 +141,6 @@ export default function CameraScreen() {
     setShowDetails(false);
     resultAnim.setValue(0);
   };
-
-  const scanLineTranslateY = scanLineAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, FRAME_SIZE - 4],
-  });
 
   if (!permission) return <View style={styles.container} />;
 
@@ -193,7 +161,6 @@ export default function CameraScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
 
-      {/* Hidden WebView for TM inference */}
       {inferenceHTML && (
         <WebView
           style={styles.hiddenWebView}
@@ -204,61 +171,47 @@ export default function CameraScreen() {
         />
       )}
 
+      {/* Full screen camera — no frame box */}
       <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" />
 
-      <View style={styles.overlayTop} />
-      <View style={styles.overlayBottom} />
-      <View style={styles.overlayLeft} />
-      <View style={styles.overlayRight} />
-
-      {/* Top bar */}
-      <View style={styles.topBar}>
-        <Text style={styles.topTitle}>TravelGuru</Text>
-        <View style={styles.liveBadge}>
-          <View style={styles.liveDot} />
-          <Text style={styles.liveText}>LIVE</Text>
-        </View>
-      </View>
-
-      {/* Scan frame */}
-      <View style={styles.frameWrap}>
-        <Animated.View style={[styles.frame, { transform: [{ scale: pulseAnim }] }]}>
-          <View style={[styles.corner, styles.cornerTL]} />
-          <View style={[styles.corner, styles.cornerTR]} />
-          <View style={[styles.corner, styles.cornerBL]} />
-          <View style={[styles.corner, styles.cornerBR]} />
-          {scanning && (
-            <Animated.View
-              style={[styles.scanLine, { transform: [{ translateY: scanLineTranslateY }] }]}
-            />
-          )}
-        </Animated.View>
-        {!result && (
-          <View style={styles.aimWrap}>
-            <Text style={styles.aimText}>
-              {scanning ? '🔍 Identifying landmark...' : 'Aim at any landmark'}
-            </Text>
-            {scanning && <Text style={styles.aimSub}>Running AI model...</Text>}
-          </View>
-        )}
-      </View>
-
-      {/* Result card */}
-      {result && !showDetails && (
+      {/* Animated scan line while scanning */}
+      {scanning && (
         <Animated.View
           style={[
-            styles.resultCard,
+            styles.scanLine,
             {
-              opacity: resultAnim,
               transform: [{
-                translateY: resultAnim.interpolate({
+                translateY: scanLineAnim.interpolate({
                   inputRange: [0, 1],
-                  outputRange: [50, 0],
+                  outputRange: [0, height * 0.75],
                 }),
               }],
             },
           ]}
-        >
+        />
+      )}
+
+      {/* Top bar */}
+      <View style={styles.topBar}>
+        <Text style={styles.topTitle}>TravelGuru</Text>
+      </View>
+
+      {/* Center hint — shown when idle or scanning */}
+      {!result && (
+        <View style={styles.hintWrap}>
+          <Text style={styles.hintText}>
+            {scanning ? '🔍 Identifying landmark...' : 'Aim at any landmark'}
+          </Text>
+          {scanning && <Text style={styles.hintSub}>Running AI model...</Text>}
+        </View>
+      )}
+
+      {/* Result card */}
+      {result && !showDetails && (
+        <Animated.View style={[styles.resultCard, {
+          opacity: resultAnim,
+          transform: [{ translateY: resultAnim.interpolate({ inputRange: [0, 1], outputRange: [50, 0] }) }],
+        }]}>
           <View style={styles.resultHeader}>
             <View style={{ flex: 1 }}>
               <Text style={styles.resultName} numberOfLines={1}>{result.name}</Text>
@@ -268,21 +221,19 @@ export default function CameraScreen() {
               <Text style={styles.confidenceText}>{result.confidence}%</Text>
             </View>
           </View>
-
           <View style={styles.yearBadge}>
             <Text style={styles.yearText}>{result.emoji} {result.year} · {result.type}</Text>
           </View>
-
-          <Text style={styles.resultDesc} numberOfLines={2}>
-            {result.shortDescription}
-          </Text>
-
+          <Text style={styles.resultDesc} numberOfLines={2}>{result.shortDescription}</Text>
           <View style={styles.resultActions}>
             <TouchableOpacity style={styles.actionBtn} onPress={() => setShowDetails(true)}>
               <Text style={styles.actionBtnText}>📖 Full History</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.actionBtn}>
-              <Text style={styles.actionBtnText}>🗺️ Navigate</Text>
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.actionBtnVoice]}
+              onPress={() => navigation.navigate('Voice')}
+            >
+              <Text style={[styles.actionBtnText, { color: colors.jade }]}>🎙️ Guru Guide</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.actionBtn, styles.actionBtnAlt]} onPress={handleReset}>
               <Text style={[styles.actionBtnText, { color: colors.terra }]}>↩ Rescan</Text>
@@ -291,7 +242,7 @@ export default function CameraScreen() {
         </Animated.View>
       )}
 
-      {/* Full details modal */}
+      {/* Details sheet */}
       {result && showDetails && (
         <View style={styles.detailsCard}>
           <View style={styles.detailsHeader}>
@@ -302,10 +253,8 @@ export default function CameraScreen() {
           </View>
           <ScrollView showsVerticalScrollIndicator={false}>
             <Text style={styles.detailsLocation}>📍 {result.location} · {result.year}</Text>
-
             <Text style={styles.sectionLabel}>History</Text>
             <Text style={styles.detailsText}>{result.fullHistory}</Text>
-
             {result.funFacts?.length > 0 && (
               <>
                 <Text style={styles.sectionLabel}>Fun Facts</Text>
@@ -317,7 +266,6 @@ export default function CameraScreen() {
                 ))}
               </>
             )}
-
             <View style={styles.infoRow}>
               <View style={styles.infoBox}>
                 <Text style={styles.infoLabel}>🕐 Hours</Text>
@@ -328,7 +276,12 @@ export default function CameraScreen() {
                 <Text style={styles.infoValue}>{result.ticketPrice}</Text>
               </View>
             </View>
-
+            <TouchableOpacity
+              style={styles.voiceGuideBtn}
+              onPress={() => navigation.navigate('Voice')}
+            >
+              <Text style={styles.voiceGuideBtnText}>🎙️ Ask the Voice Guide</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.rescanBtn} onPress={handleReset}>
               <Text style={styles.rescanText}>↩ Scan Again</Text>
             </TouchableOpacity>
@@ -356,35 +309,49 @@ export default function CameraScreen() {
   );
 }
 
-const OVERLAY_SIZE = (height - FRAME_SIZE) / 2;
-const SIDE_OVERLAY = (width - FRAME_SIZE) / 2;
-const CORNER = 24;
-const BORDER = 3;
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   hiddenWebView: { width: 0, height: 0, position: 'absolute' },
-  overlayTop: { position: 'absolute', top: 0, left: 0, right: 0, height: OVERLAY_SIZE, backgroundColor: 'rgba(26,18,8,0.75)' },
-  overlayBottom: { position: 'absolute', bottom: 0, left: 0, right: 0, height: OVERLAY_SIZE, backgroundColor: 'rgba(26,18,8,0.75)' },
-  overlayLeft: { position: 'absolute', top: OVERLAY_SIZE, left: 0, width: SIDE_OVERLAY, height: FRAME_SIZE, backgroundColor: 'rgba(26,18,8,0.75)' },
-  overlayRight: { position: 'absolute', top: OVERLAY_SIZE, right: 0, width: SIDE_OVERLAY, height: FRAME_SIZE, backgroundColor: 'rgba(26,18,8,0.75)' },
-  topBar: { position: 'absolute', top: 48, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20 },
+
+  scanLine: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0,
+    height: 2,
+    backgroundColor: colors.terra,
+    opacity: 0.85,
+    elevation: 4,
+  },
+
+  topBar: {
+    position: 'absolute', top: 48, left: 0, right: 0,
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20,
+  },
   topTitle: { fontFamily: 'Syne_800ExtraBold', fontSize: 18, color: colors.sand },
-  liveBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(200,98,42,0.25)', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4, borderWidth: 1, borderColor: 'rgba(200,98,42,0.4)' },
-  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.terra },
-  liveText: { fontFamily: 'Syne_700Bold', fontSize: 10, color: colors.terra, letterSpacing: 1 },
-  frameWrap: { position: 'absolute', top: OVERLAY_SIZE, left: SIDE_OVERLAY, width: FRAME_SIZE, height: FRAME_SIZE, alignItems: 'center' },
-  frame: { width: FRAME_SIZE, height: FRAME_SIZE, position: 'relative' },
-  corner: { position: 'absolute', width: CORNER, height: CORNER, borderColor: colors.terra },
-  cornerTL: { top: 0, left: 0, borderTopWidth: BORDER, borderLeftWidth: BORDER, borderTopLeftRadius: 4 },
-  cornerTR: { top: 0, right: 0, borderTopWidth: BORDER, borderRightWidth: BORDER, borderTopRightRadius: 4 },
-  cornerBL: { bottom: 0, left: 0, borderBottomWidth: BORDER, borderLeftWidth: BORDER, borderBottomLeftRadius: 4 },
-  cornerBR: { bottom: 0, right: 0, borderBottomWidth: BORDER, borderRightWidth: BORDER, borderBottomRightRadius: 4 },
-  scanLine: { position: 'absolute', left: 0, right: 0, height: 2, backgroundColor: colors.terra, opacity: 0.8 },
-  aimWrap: { alignItems: 'center', marginTop: 16 },
-  aimText: { fontFamily: 'DMSans_400Regular', fontSize: 13, color: 'rgba(245,239,224,0.8)', letterSpacing: 0.5 },
-  aimSub: { fontFamily: 'DMSans_400Regular', fontSize: 11, color: 'rgba(245,239,224,0.5)', marginTop: 4 },
-  resultCard: { position: 'absolute', bottom: 100, left: 16, right: 16, backgroundColor: colors.sand, borderRadius: 20, padding: 18, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.4, shadowRadius: 20, elevation: 12 },
+
+  hintWrap: {
+    position: 'absolute',
+    top: height * 0.42,
+    left: 0, right: 0,
+    alignItems: 'center',
+  },
+  hintText: {
+    fontFamily: 'DMSans_400Regular', fontSize: 14,
+    color: 'rgba(245,239,224,0.9)', letterSpacing: 0.5,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    paddingHorizontal: 20, paddingVertical: 10,
+    borderRadius: 20, overflow: 'hidden',
+  },
+  hintSub: {
+    fontFamily: 'DMSans_400Regular', fontSize: 11,
+    color: 'rgba(245,239,224,0.5)', marginTop: 10,
+  },
+
+  resultCard: {
+    position: 'absolute', bottom: 100, left: 16, right: 16,
+    backgroundColor: colors.sand, borderRadius: 20, padding: 18,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.4, shadowRadius: 20, elevation: 12,
+  },
   resultHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8, gap: 10 },
   resultName: { fontFamily: 'Syne_800ExtraBold', fontSize: 20, color: colors.ink },
   resultLocation: { fontFamily: 'DMSans_400Regular', fontSize: 12, color: colors.muted, marginTop: 2 },
@@ -396,8 +363,15 @@ const styles = StyleSheet.create({
   resultActions: { flexDirection: 'row', gap: 8 },
   actionBtn: { flex: 1, backgroundColor: colors.sandDark, borderRadius: 10, paddingVertical: 10, alignItems: 'center' },
   actionBtnAlt: { backgroundColor: colors.terraPale },
+  actionBtnVoice: { backgroundColor: colors.jadePale },
   actionBtnText: { fontFamily: 'DMSans_500Medium', fontSize: 11, color: colors.inkMid },
-  detailsCard: { position: 'absolute', bottom: 0, left: 0, right: 0, top: height * 0.15, backgroundColor: colors.sand, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.2, shadowRadius: 16, elevation: 16 },
+
+  detailsCard: {
+    position: 'absolute', bottom: 0, left: 0, right: 0, top: height * 0.15,
+    backgroundColor: colors.sand, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.2, shadowRadius: 16, elevation: 16,
+  },
   detailsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   detailsName: { fontFamily: 'Syne_800ExtraBold', fontSize: 20, color: colors.ink, flex: 1 },
   closeBtn: { fontSize: 18, color: colors.muted, paddingLeft: 12 },
@@ -411,14 +385,24 @@ const styles = StyleSheet.create({
   infoBox: { flex: 1, backgroundColor: '#fff', borderRadius: 12, padding: 12 },
   infoLabel: { fontFamily: 'DMSans_500Medium', fontSize: 11, color: colors.muted, marginBottom: 4 },
   infoValue: { fontFamily: 'Syne_700Bold', fontSize: 12, color: colors.ink },
-  rescanBtn: { alignItems: 'center', paddingVertical: 16, marginTop: 8 },
+  voiceGuideBtn: { marginTop: 16, backgroundColor: colors.jadePale, borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  voiceGuideBtnText: { fontFamily: 'DMSans_500Medium', fontSize: 13, color: colors.jade },
+  rescanBtn: { alignItems: 'center', paddingVertical: 16, marginTop: 4 },
   rescanText: { fontFamily: 'DMSans_400Regular', fontSize: 13, color: colors.muted },
+
   bottomBar: { position: 'absolute', bottom: 24, left: 0, right: 0, alignItems: 'center', gap: 10 },
-  scanBtn: { width: 72, height: 72, borderRadius: 36, backgroundColor: colors.terra, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: 'rgba(245,239,224,0.3)', shadowColor: colors.terra, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.5, shadowRadius: 12, elevation: 8 },
+  scanBtn: {
+    width: 72, height: 72, borderRadius: 36, backgroundColor: colors.terra,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 3, borderColor: 'rgba(245,239,224,0.3)',
+    shadowColor: colors.terra, shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5, shadowRadius: 12, elevation: 8,
+  },
   scanBtnActive: { backgroundColor: colors.inkMid },
   scanBtnInner: { width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
   scanBtnIcon: { fontSize: 24 },
   scanHint: { fontFamily: 'DMSans_400Regular', fontSize: 12, color: 'rgba(245,239,224,0.6)' },
+
   permContainer: { backgroundColor: colors.ink, justifyContent: 'center', alignItems: 'center', padding: 32 },
   permEmoji: { fontSize: 48, marginBottom: 16 },
   permTitle: { fontFamily: 'Syne_800ExtraBold', fontSize: 22, color: colors.sand, marginBottom: 12 },
